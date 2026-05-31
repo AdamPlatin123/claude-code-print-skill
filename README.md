@@ -1,23 +1,24 @@
 # claude-code-print-skill
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill for printing PDF files to Windows printers with automatic duplex and color control.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill for printing PDF files with automatic duplex and color control. Works on **Windows**, **Linux**, and **macOS**.
 
 ## Features
 
-- **Auto-discovery** of physical printers (filters out virtual printers like PDF, XPS, Fax)
-- **Capability detection** — queries each printer for duplex and color support
-- **Triple-layer duplex/color control** via .NET API + Win32 DevMode + DefaultPageSettings
-- **Image-based rendering** — converts PDF pages to PNG via PyMuPDF, then prints images through the Windows spooler (avoids raw-byte garbled output)
-- **CLI and Skill modes** — usable standalone or as a Claude Code skill
+- **Cross-platform**: Windows (.NET PrintDocument), Linux/macOS (raw PJL via TCP 9100)
+- **Auto-discovery** of physical printers (filters out virtual printers)
+- **Capability detection** — duplex and color support per printer
+- **Reliable duplex control**:
+  - Windows: triple-layer .NET + Win32 DevMode + DefaultPageSettings
+  - Linux/macOS: PJL `SET DUPLEX=ON` commands via raw TCP socket (bypasses CUPS)
+- **Configurable paper size**: A4, Letter, Legal
 
 ## Prerequisites
 
-- Windows 10/11
-- Python 3.10+ with `pymupdf` and `Pillow`
-- .NET Framework 4.x (provides `csc.exe`)
-- At least one physical printer installed
-
-## Install
+| Platform | Requirements |
+|----------|-------------|
+| **Windows** | Python 3.10+, `pymupdf`, `Pillow`, .NET Framework 4.x (`csc.exe`) |
+| **Linux** | Python 3.10+, network printer with TCP port 9100 open |
+| **macOS** | Python 3.10+, network printer with TCP port 9100 open |
 
 ```bash
 pip install pymupdf Pillow
@@ -25,63 +26,68 @@ pip install pymupdf Pillow
 
 ## Usage
 
-### CLI
-
 ```bash
 # List available printers with capabilities
 python scripts/print.py --list
 
-# Print with defaults (auto-detect printer, duplex vertical, mono)
+# Print test page (no PDF needed)
+python scripts/print.py --test --printer 10.123.45.145 --duplex vertical --color mono --paper A4
+
+# Print a PDF (auto-detect printer)
 python scripts/print.py document.pdf
 
-# Print to specific printer with custom settings
-python scripts/print.py document.pdf --printer "HP M401dn" --duplex vertical --color mono
-
-# High-quality rendering
-python scripts/print.py document.pdf --dpi 300 --color color
+# Print with all options
+python scripts/print.py document.pdf --printer "HP M401dn" --duplex vertical --color mono --paper A4 --dpi 300
 ```
-
-### Claude Code Skill
-
-Copy or symlink this directory into your Claude Code skills folder:
-
-```bash
-# Option 1: Symlink
-mklink /D "%USERPROFILE%\.claude\skills\print" "<path-to-this-repo>"
-
-# Option 2: Copy
-xcopy /E /I "<path-to-this-repo>" "%USERPROFILE%\.claude\skills\print"
-```
-
-Then in Claude Code, type `/print` or say "打印这个PDF".
 
 ## How It Works
 
+### Windows
 ```
-PDF → pymupdf (render @200 DPI) → PNG images → PrintEngine.cs (compiled) → Windows Print Spooler → Printer
+PDF → pymupdf (PNG) → C# PrintEngine.exe (triple-layer DevMode) → Windows Spooler → Printer
 ```
 
-The triple-layer setting ensures duplex and color preferences are respected:
+### Linux / macOS
+```
+PDF → pymupdf (PNG) → PostScript + PJL DUPLEX=ON → TCP socket 9100 → Printer
+```
 
-1. **.NET API**: `PrinterSettings.Duplex` / `SupportsColor`
-2. **Win32 DevMode**: `DocumentProperties()` with `dmDuplex` and `dmColor` fields
-3. **Confirmation**: `DefaultPageSettings.PrinterSettings.Duplex` reapplied
+**Why bypass CUPS?** CUPS duplex settings (`-o sides=two-sided-long-edge`) are frequently ignored by network printers — the PPD duplexer option may be disabled, or IPP may reject the job. Raw PJL via socket is the most reliable cross-platform method.
 
 ## Options
 
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
-| `--printer, -p` | Printer name | Auto-detect | Target printer |
+| `--printer, -p` | Name or IP | Auto-detect | Target printer |
 | `--duplex, -d` | `simplex`, `vertical`, `horizontal` | `vertical` | Duplex mode |
 | `--color, -c` | `mono`, `color` | `mono` | Color mode |
+| `--paper` | `A4`, `Letter`, `Legal` | `A4` | Paper size |
 | `--dpi` | Integer | `200` | Render resolution |
 | `--list` | — | — | List printers and exit |
+| `--test` | — | — | Print test page |
 
-## Troubleshooting
+## Install as Claude Code Skill
 
-- **Garbled output**: Should not occur with this tool (uses image-based printing, not raw bytes)
-- **Single-sided despite duplex setting**: Ensure printer hardware supports auto-duplex; check with `--list`
-- **Printer not found**: Add it via Windows Settings or `Add-PrinterPort` + `Add-Printer`
+```bash
+# Symlink into skills directory
+ln -s "$(pwd)" ~/.claude/skills/print        # Linux/Mac
+mklink /D "%USERPROFILE%\.claude\skills\print" "%CD%"  # Windows
+```
+
+Then in Claude Code: `/print`, `/print file.pdf`, or say "打印这个PDF".
+
+## Adding a Network Printer
+
+**Windows:**
+```powershell
+Add-PrinterPort -Name "IP_10.x.x.x" -PrinterHostAddress "10.x.x.x"
+Add-Printer -Name "Printer" -PortName "IP_10.x.x.x" -DriverName "Driver Name"
+```
+
+**Linux/macOS:**
+```bash
+lpadmin -p Printer -E -v socket://10.x.x.x -m drv:///sample.drv/generic.ppd
+```
 
 ## License
 
